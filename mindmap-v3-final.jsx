@@ -1,0 +1,1463 @@
+import { useState, useCallback, useRef, useEffect } from "react";
+
+// ═══════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════
+const PROVIDERS = {
+  perplexity: {
+    name:"Perplexity", icon:"◎", type:"ai+search",
+    keyPrefix:"pplx-", keyHint:"pplx-xxxxxxxx",
+    models:[
+      {id:"sonar",label:"Sonar",free:false},
+      {id:"sonar-pro",label:"Sonar Pro",free:false},
+      {id:"sonar-reasoning",label:"Sonar Reasoning",free:false},
+    ],
+    defaultModel:"sonar",
+    endpoint:"https://api.perplexity.ai/chat/completions",
+    format:"openai", hasCitations:true, hasSearch:true,
+    cutoff:"Realtime",
+    signupUrl:"https://www.perplexity.ai/settings/api", color:"#7C3AED",
+  },
+  openrouter: {
+    name:"OpenRouter", icon:"⇌", type:"ai",
+    keyPrefix:"sk-or-", keyHint:"sk-or-v1-xxxxxxxx",
+    models:[
+      {id:"meta-llama/llama-3.3-70b-instruct:free",label:"Llama 3.3 70B",free:true},
+      {id:"google/gemini-2.0-flash-exp:free",label:"Gemini 2.0 Flash",free:true},
+      {id:"mistralai/mistral-7b-instruct:free",label:"Mistral 7B",free:true},
+      {id:"anthropic/claude-3.5-sonnet",label:"Claude 3.5 Sonnet",free:false},
+      {id:"openai/gpt-4o-mini",label:"GPT-4o Mini",free:false},
+      {id:"deepseek/deepseek-r1:free",label:"DeepSeek R1",free:true},
+    ],
+    defaultModel:"meta-llama/llama-3.3-70b-instruct:free",
+    endpoint:"https://openrouter.ai/api/v1/chat/completions",
+    format:"openai", hasCitations:false, hasSearch:false,
+    cutoff:"Tùy model (~2024)",
+    signupUrl:"https://openrouter.ai/keys", color:"#2563EB",
+  },
+  gemini: {
+    name:"Gemini", icon:"✦", type:"ai",
+    keyPrefix:"AIza", keyHint:"AIzaxxxxxxxxxxxxxxxx",
+    models:[
+      {id:"gemini-2.0-flash",label:"Gemini 2.0 Flash",free:true},
+      {id:"gemini-1.5-pro",label:"Gemini 1.5 Pro",free:false},
+      {id:"gemini-1.5-flash",label:"Gemini 1.5 Flash",free:true},
+    ],
+    defaultModel:"gemini-2.0-flash",
+    endpoint:"https://generativelanguage.googleapis.com/v1beta/models",
+    format:"gemini", hasCitations:false, hasSearch:false,
+    cutoff:"Tháng 4/2024",
+    signupUrl:"https://aistudio.google.com/app/apikey", color:"#059669",
+  },
+  groq: {
+    name:"Groq", icon:"⚡", type:"ai",
+    keyPrefix:"gsk_", keyHint:"gsk_xxxxxxxxxxxxxxxx",
+    models:[
+      {id:"llama-3.3-70b-versatile",label:"Llama 3.3 70B",free:true},
+      {id:"llama-3.1-8b-instant",label:"Llama 3.1 8B Instant",free:true},
+      {id:"mixtral-8x7b-32768",label:"Mixtral 8x7B",free:true},
+      {id:"gemma2-9b-it",label:"Gemma2 9B",free:true},
+    ],
+    defaultModel:"llama-3.3-70b-versatile",
+    endpoint:"https://api.groq.com/openai/v1/chat/completions",
+    format:"openai", hasCitations:false, hasSearch:false,
+    cutoff:"Tháng 3/2024",
+    signupUrl:"https://console.groq.com/keys", color:"#DC2626",
+  },
+  anthropic: {
+    name:"Claude", icon:"◈", type:"ai",
+    keyPrefix:"sk-ant-", keyHint:"sk-ant-xxxxxxxxxxxxxxxx",
+    models:[
+      {id:"claude-sonnet-4-20250514",label:"Claude Sonnet 4",free:false},
+      {id:"claude-opus-4-20250514",label:"Claude Opus 4",free:false},
+      {id:"claude-haiku-4-5-20251001",label:"Claude Haiku 4.5",free:false},
+    ],
+    defaultModel:"claude-sonnet-4-20250514",
+    endpoint:"https://api.anthropic.com/v1/messages",
+    format:"anthropic", hasCitations:false, hasSearch:false,
+    cutoff:"Tháng 4/2024",
+    signupUrl:"https://console.anthropic.com/", color:"#D97706",
+  },
+};
+
+const SEARCH_PROVIDERS = {
+  none:      {name:"Không có",icon:"⚠",color:"#6B7280",freeReq:"Dữ liệu có thể cũ"},
+  tavily:    {name:"Tavily",icon:"🔍",color:"#7C3AED",keyHint:"tvly-xxxxxxxx",signupUrl:"https://tavily.com",freeReq:"1,000 req/tháng free"},
+  serper:    {name:"Serper (Google)",icon:"🌐",color:"#2563EB",keyHint:"xxxxxxxxxxxxxxxx",signupUrl:"https://serper.dev",freeReq:"2,500 req/tháng free"},
+  wikipedia: {name:"Wikipedia API",icon:"📖",color:"#059669",freeReq:"Unlimited, không cần key"},
+};
+
+const COLORS=[
+  {bg:"#7C3AED",light:"#EDE9FE",dark:"#5B21B6"},
+  {bg:"#DB2777",light:"#FCE7F3",dark:"#9D174D"},
+  {bg:"#D97706",light:"#FEF3C7",dark:"#92400E"},
+  {bg:"#059669",light:"#D1FAE5",dark:"#065F46"},
+  {bg:"#2563EB",light:"#DBEAFE",dark:"#1E3A8A"},
+  {bg:"#DC2626",light:"#FEE2E2",dark:"#7F1D1D"},
+  {bg:"#0891B2",light:"#CFFAFE",dark:"#164E63"},
+  {bg:"#65A30D",light:"#ECFCCB",dark:"#365314"},
+];
+
+const DEFAULT_SETTINGS={aiKey:"",aiProvider:"",model:"",searchKey:"",searchProvider:"wikipedia",ghToken:""};
+
+// ── Helpers ──────────────────────────────────────────────
+function detectProvider(key){
+  if(!key||key.length<6)return null;
+  for(const[id,p]of Object.entries(PROVIDERS))
+    if(p.keyPrefix&&key.startsWith(p.keyPrefix))return id;
+  return null;
+}
+
+function autoTags(topic,branches=[]){
+  const words=[topic,...branches.map(b=>b.title)].join(" ")
+    .split(/[\s,，。、.]+/).map(w=>w.trim()).filter(w=>w.length>2);
+  return[...new Set(words)].slice(0,8);
+}
+
+function getCutoffWarning(provider,searchProvider){
+  if(!provider)return null;
+  if(provider==="perplexity")return null;
+  if(searchProvider==="tavily"||searchProvider==="serper")return null;
+  return PROVIDERS[provider]?.cutoff||null;
+}
+
+// ── XSS-safe escape for HTML template strings ──
+function esc(str){
+  return String(str||"")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#39;");
+}
+
+// ═══════════════════════════════════════════════════════════
+// API ADAPTERS
+// ═══════════════════════════════════════════════════════════
+function withTimeout(promise,ms=30000,msg="Timeout sau 30 giây"){
+  return Promise.race([promise,new Promise((_,rej)=>setTimeout(()=>rej(new Error(msg)),ms))]);
+}
+
+function parseApiError(res,err){
+  if(res.status===401)return"API key không hợp lệ hoặc hết hạn";
+  if(res.status===402)return"Hết credit — nạp thêm tại trang provider";
+  if(res.status===403)return"Không có quyền truy cập model này";
+  if(res.status===429)return"Rate limit — đợi vài giây rồi thử lại";
+  if(res.status===503)return"Server provider đang quá tải — thử lại sau";
+  return err?.error?.message||err?.message||`HTTP ${res.status}`;
+}
+
+async function callOpenAI(endpoint,key,model,messages){
+  const headers={"Content-Type":"application/json",Authorization:`Bearer ${key}`};
+  if(endpoint.includes("openrouter")){
+    headers["HTTP-Referer"]="https://claude.ai";
+    headers["X-Title"]="AI Mind Map v3";
+  }
+  let res;
+  try{
+    res=await withTimeout(
+      fetch(endpoint,{method:"POST",headers,body:JSON.stringify({model,messages,max_tokens:2000,temperature:0.3})})
+    );
+  }catch(e){
+    if(e.message.includes("Failed to fetch")||e.message.includes("NetworkError")||e.message.includes("CORS"))
+      throw new Error("Network/CORS lỗi — kiểm tra key hoặc thử provider khác");
+    throw e;
+  }
+  if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(parseApiError(res,err));}
+  const d=await res.json();
+  return{text:d.choices?.[0]?.message?.content||"",citations:d.citations||[]};
+}
+
+async function callGemini(endpoint,key,model,messages){
+  const url=`${endpoint}/${model}:generateContent?key=${key}`;
+  const sys=messages.find(m=>m.role==="system");
+  const body={
+    contents:messages.filter(m=>m.role!=="system").map(m=>({role:m.role==="assistant"?"model":"user",parts:[{text:m.content}]})),
+    generationConfig:{maxOutputTokens:2000,temperature:0.3},
+    ...(sys?{systemInstruction:{parts:[{text:sys.content}]}}:{}),
+  };
+  let res;
+  try{
+    res=await withTimeout(fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}));
+  }catch(e){
+    if(e.message.includes("Failed to fetch"))
+      throw new Error("CORS block — Gemini đôi khi không dùng được trực tiếp từ browser. Thử OpenRouter → Gemini 2.0 Flash");
+    throw e;
+  }
+  if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(parseApiError(res,err));}
+  const d=await res.json();
+  const text=d.candidates?.[0]?.content?.parts?.[0]?.text||"";
+  if(!text)throw new Error("Gemini trả về response rỗng — thử lại hoặc đổi model");
+  return{text,citations:[]};
+}
+
+async function callAnthropic(endpoint,key,model,messages){
+  const sys=messages.find(m=>m.role==="system");
+  let res;
+  try{
+    res=await withTimeout(
+      fetch(endpoint,{
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01"},
+        body:JSON.stringify({model,max_tokens:2000,temperature:0.3,
+          ...(sys?{system:sys.content}:{}),
+          messages:messages.filter(m=>m.role!=="system")}),
+      })
+    );
+  }catch(e){
+    if(e.message.includes("Failed to fetch"))
+      throw new Error("CORS block — Anthropic API không dùng trực tiếp từ browser được. Dùng OpenRouter → Claude 3.5 Sonnet thay thế");
+    throw e;
+  }
+  if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(parseApiError(res,err));}
+  const d=await res.json();
+  return{text:d.content?.[0]?.text||"",citations:[]};
+}
+
+async function callAI(providerId,key,model,messages){
+  if(!providerId)throw new Error("Chưa chọn AI provider");
+  if(!key)throw new Error("Chưa nhập API key");
+  if(!model)throw new Error("Chưa chọn model");
+  const p=PROVIDERS[providerId];
+  if(!p)throw new Error("Provider không tồn tại: "+providerId);
+  if(p.format==="gemini")return callGemini(p.endpoint,key,model,messages);
+  if(p.format==="anthropic")return callAnthropic(p.endpoint,key,model,messages);
+  return callOpenAI(p.endpoint,key,model,messages);
+}
+
+// ═══════════════════════════════════════════════════════════
+// SEARCH ADAPTERS
+// ═══════════════════════════════════════════════════════════
+async function searchTavily(key,query){
+  const res=await withTimeout(
+    fetch("https://api.tavily.com/search",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({api_key:key,query,max_results:6,include_answer:true})}),
+    15000,"Tavily timeout"
+  );
+  if(!res.ok)throw new Error(`Tavily error ${res.status}`);
+  const d=await res.json();
+  return(d.results||[]).map(r=>({url:r.url,title:r.title,snippet:r.content?.slice(0,250)||""}));
+}
+
+async function searchSerper(key,query){
+  const res=await withTimeout(
+    fetch("https://google.serper.dev/search",{method:"POST",
+      headers:{"Content-Type":"application/json","X-API-KEY":key},
+      body:JSON.stringify({q:query,num:6})}),
+    15000,"Serper timeout"
+  );
+  if(!res.ok)throw new Error(`Serper error ${res.status}`);
+  const d=await res.json();
+  return(d.organic||[]).map(r=>({url:r.link,title:r.title,snippet:r.snippet||""}));
+}
+
+async function searchWikipedia(query){
+  const isVi=/[àáâãèéêìíòóôõùúýăđơư]/i.test(query);
+  for(const lang of isVi?["vi","en"]:["en","vi"]){
+    try{
+      const r=await withTimeout(
+        fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`),
+        10000
+      );
+      if(r.ok){
+        const d=await r.json();
+        if(d.title&&d.extract)
+          return[{url:d.content_urls?.desktop?.page||`https://${lang}.wikipedia.org/wiki/${encodeURIComponent(query)}`,title:d.title,snippet:d.extract.slice(0,300)}];
+      }
+    }catch{}
+  }
+  return[];
+}
+
+async function doSearch(provider,key,query){
+  try{
+    if(provider==="tavily"&&key)return await searchTavily(key,query);
+    if(provider==="serper"&&key)return await searchSerper(key,query);
+    if(provider==="wikipedia")return await searchWikipedia(query);
+  }catch(e){console.warn("Search fallback:",e.message);}
+  return[];
+}
+
+// ═══════════════════════════════════════════════════════════
+// PROMPT BUILDER — BUG FIXED (missing colon in ternary)
+// ═══════════════════════════════════════════════════════════
+function buildPrompt(topic,results){
+  const isVi=/[àáâãèéêìíòóôõùúýăđơư]/i.test(topic);
+  const lang=isVi?"Vietnamese":"English";
+  const ctx=results.length>0
+    ?`\nWeb search results (ground ALL facts on these, do not invent):\n${results.map((r,i)=>`[${i+1}] ${r.title}\nURL: ${r.url}\n${r.snippet}`).join("\n\n")}\n\nAssign the most relevant URL to each node's source field.`
+    :`\n⚠️ No search data available. Use only well-known facts. For sources, use: https://${isVi?"vi":"en"}.wikipedia.org/wiki/[relevant_keyword]`;
+  return`Create a factual mind map about: "${topic}". Language: ${lang}.${ctx}
+
+STRICT RULES:
+- ONLY use verifiable, well-established facts — NO speculation or inference
+- Every node MUST have a real source URL
+- "fact" field: must include specific data (number, date, proper name, or measurement)
+- topic/title/label: NEVER exceed the character limit
+
+Return PURE JSON only — no markdown, no code fences, no explanation, nothing else:
+{"topic":"name ≤18 chars","source":"URL","branches":[{"title":"≤14 chars","fact":"1-2 sentences with specifics","source":"URL","children":[{"label":"≤16 chars","fact":"specific fact","source":"URL"}]}]}
+Exactly 6 branches, exactly 3 children each. ONLY JSON, starting with {`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// EXPORT UTILS
+// ═══════════════════════════════════════════════════════════
+function buildRecord(data,settings){
+  const tags=autoTags(data.topic,data.branches||[]);
+
+  // Deduplicated citations
+  const seen=new Set();
+  const citations=(data.branches||[]).flatMap(b=>{
+    const items=[];
+    if(b.source&&!seen.has(b.source)){seen.add(b.source);items.push({url:b.source,title:b.title,domain:b.source.replace(/^https?:\/\//,"").split("/")[0],node_id:b.title});}
+    (b.children||[]).forEach(c=>{
+      if(c.source&&!seen.has(c.source)){seen.add(c.source);items.push({url:c.source,title:c.label,domain:c.source.replace(/^https?:\/\//,"").split("/")[0],node_id:c.label});}
+    });
+    return items;
+  });
+
+  const full_text=[data.topic,...(data.branches||[]).map(b=>`${b.title}: ${b.fact||""} ${(b.children||[]).map(c=>`${c.label}: ${c.fact||""}`).join(". ")}`)].join(". ");
+
+  // Correct freshness logic
+  const isRealtime=settings.aiProvider==="perplexity"||(settings.searchProvider&&settings.searchProvider!=="none"&&settings.searchProvider!=="none"&&(settings.searchProvider==="tavily"||settings.searchProvider==="serper"));
+  const data_freshness=isRealtime?"realtime":`cutoff:${PROVIDERS[settings.aiProvider]?.cutoff||"unknown"}`;
+
+  return{
+    id:Date.now().toString(), version:"3.0", created_at:new Date().toISOString(),
+    topic:data.topic, source:data.source, tags,
+    meta:{
+      ai_provider:settings.aiProvider, ai_model:settings.model,
+      search_provider:settings.searchProvider||"none",
+      data_freshness, has_warning:!isRealtime,
+    },
+    branches:data.branches, citations, full_text, embeddings:null,
+  };
+}
+
+function dlJSON(data,settings){
+  const rec=buildRecord(data,settings);
+  const a=Object.assign(document.createElement("a"),{
+    href:URL.createObjectURL(new Blob([JSON.stringify(rec,null,2)],{type:"application/json"})),
+    download:`mindmap_${data.topic.replace(/\W+/g,"_")}_${Date.now()}.json`,
+  });
+  a.click();
+  return rec;
+}
+
+function dlPNG(topic){
+  const svg=document.querySelector("svg[viewBox]");
+  if(!svg)return;
+  const W=1800,H=1400;
+  const c=document.createElement("canvas");c.width=W;c.height=H;
+  const ctx=c.getContext("2d");
+  ctx.fillStyle="#080717";ctx.fillRect(0,0,W,H);
+  const img=new Image();
+  const svgData=new XMLSerializer().serializeToString(svg);
+  img.onload=()=>{
+    ctx.drawImage(img,0,0,W,H);
+    Object.assign(document.createElement("a"),{href:c.toDataURL("image/png"),download:`mindmap_${topic.replace(/\W+/g,"_")}.png`}).click();
+  };
+  img.src="data:image/svg+xml;base64,"+btoa(unescape(encodeURIComponent(svgData)));
+}
+
+// XSS-safe standalone HTML export
+function dlStandaloneHTML(data,settings){
+  const rec=buildRecord(data,settings);
+  const branchesHTML=(rec.branches||[]).map(b=>`
+    <div class="branch">
+      <div class="btitle">${esc(b.title)}</div>
+      <div class="bfact">${esc(b.fact||"")}</div>
+      ${b.source?`<a class="bsrc" href="${esc(b.source)}" target="_blank" rel="noopener">🔗 ${esc(b.source.replace(/^https?:\/\//,"").split("/").slice(0,3).join("/"))}</a>`:""}
+      <div class="children">
+        ${(b.children||[]).map(c=>`
+          <div class="child">
+            <div class="clabel">${esc(c.label)}</div>
+            <div class="cfact">${esc(c.fact||"")}</div>
+            ${c.source?`<a class="bsrc" href="${esc(c.source)}" target="_blank" rel="noopener">🔗 ${esc(c.source.replace(/^https?:\/\//,"").split("/").slice(0,3).join("/"))}</a>`:""}
+          </div>`).join("")}
+      </div>
+    </div>`).join("");
+
+  const tagsHTML=rec.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join("");
+
+  const html=`<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mind Map: ${esc(rec.topic)}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#080717;font-family:system-ui,-apple-system,sans-serif;color:white;min-height:100vh;padding:24px 16px}
+.container{max-width:960px;margin:0 auto}
+h1{font-size:26px;font-weight:900;margin-bottom:6px;letter-spacing:-0.5px}
+.meta{font-size:12px;color:rgba(255,255,255,0.4);margin-bottom:12px}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:24px}
+.tag{background:rgba(124,58,237,0.2);color:#a78bfa;border:1px solid rgba(124,58,237,0.35);border-radius:20px;padding:2px 10px;font-size:11px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:32px}
+.branch{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:16px}
+.btitle{font-weight:800;font-size:16px;margin-bottom:8px;color:white}
+.bfact{font-size:13px;color:rgba(255,255,255,0.65);line-height:1.6;margin-bottom:10px}
+.bsrc{font-size:11px;color:#a78bfa;text-decoration:none;display:block;margin-bottom:10px;word-break:break-all}
+.bsrc:hover{text-decoration:underline}
+.children{border-left:2px solid rgba(124,58,237,0.3);padding-left:14px;margin-top:12px}
+.child{margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.05)}
+.child:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+.clabel{font-size:13px;font-weight:700;margin-bottom:4px;color:rgba(255,255,255,0.9)}
+.cfact{font-size:12px;color:rgba(255,255,255,0.5);line-height:1.5;margin-bottom:4px}
+.section-title{font-size:14px;font-weight:700;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08)}
+.citations{display:flex;flex-direction:column;gap:8px}
+.cit{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 14px}
+.cit a{color:#a78bfa;font-size:13px;text-decoration:none;font-weight:600;display:block;margin-bottom:2px}
+.cit a:hover{text-decoration:underline}
+.domain{font-size:11px;color:rgba(255,255,255,0.3)}
+footer{margin-top:32px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:rgba(255,255,255,0.25);text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🧠 ${esc(rec.topic)}</h1>
+  <div class="meta">${esc(new Date(rec.created_at).toLocaleString("vi-VN"))} · ${esc(rec.meta.ai_provider)} · ${esc(rec.meta.search_provider)} · ${esc(rec.meta.data_freshness)}</div>
+  <div class="tags">${tagsHTML}</div>
+  <div class="grid">${branchesHTML}</div>
+  ${rec.citations.length>0?`
+  <div class="section-title">Tất cả nguồn tham khảo (${rec.citations.length})</div>
+  <div class="citations">
+    ${rec.citations.map(c=>`<div class="cit"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a><div class="domain">${esc(c.domain)}</div></div>`).join("")}
+  </div>`:""}
+  <footer>AI Mind Map v3 · Generated with ${esc(rec.meta.ai_provider)} · ${esc(rec.meta.data_freshness)}</footer>
+</div>
+<script>window.__mindmap__=${JSON.stringify(rec).replace(/<\/script>/gi,"<\\/script>")};</script>
+</body></html>`;
+
+  Object.assign(document.createElement("a"),{
+    href:URL.createObjectURL(new Blob([html],{type:"text/html;charset=utf-8"})),
+    download:`mindmap_${rec.topic.replace(/\W+/g,"_")}.html`,
+  }).click();
+}
+
+// ═══════════════════════════════════════════════════════════
+// GITHUB GIST
+// ═══════════════════════════════════════════════════════════
+const GIST_NAME="AI-MindMap-Wiki";
+
+async function gistFindId(token){
+  const r=await withTimeout(
+    fetch("https://api.github.com/gists",{headers:{Authorization:`token ${token}`,Accept:"application/vnd.github.v3+json"}}),
+    10000
+  );
+  if(!r.ok)throw new Error(`GitHub auth failed (${r.status}) — kiểm tra token có quyền gist`);
+  const list=await r.json();
+  return Array.isArray(list)?list.find(g=>g.description===GIST_NAME)?.id:null;
+}
+
+async function gistSave(token,history){
+  if(!token)return{ok:false,msg:""};
+  try{
+    const content=JSON.stringify(history,null,2);
+    const existingId=await gistFindId(token);
+    const method=existingId?"PATCH":"POST";
+    const url=existingId?`https://api.github.com/gists/${existingId}`:"https://api.github.com/gists";
+    const body=existingId
+      ?{files:{"mindmap-wiki.json":{content}}}
+      :{description:GIST_NAME,public:false,files:{"mindmap-wiki.json":{content}}};
+    const r=await withTimeout(
+      fetch(url,{method,headers:{Authorization:`token ${token}`,"Content-Type":"application/json"},body:JSON.stringify(body)}),
+      10000
+    );
+    if(!r.ok)throw new Error(`Gist write failed (${r.status})`);
+    return{ok:true,msg:`✅ Synced ${history.length} maps`};
+  }catch(e){return{ok:false,msg:`⚠️ Gist: ${e.message.slice(0,60)}`};}
+}
+
+async function gistLoad(token){
+  if(!token)return null;
+  try{
+    const id=await gistFindId(token);
+    if(!id)return null;
+    const d=await(await withTimeout(
+      fetch(`https://api.github.com/gists/${id}`,{headers:{Authorization:`token ${token}`}}),
+      10000
+    )).json();
+    const raw=d.files?.["mindmap-wiki.json"]?.content;
+    return raw?JSON.parse(raw):null;
+  }catch(e){console.warn("Gist load:",e.message);return null;}
+}
+
+// ═══════════════════════════════════════════════════════════
+// SVG MIND MAP
+// ═══════════════════════════════════════════════════════════
+function pxy(cx,cy,r,deg){const rad=((deg-90)*Math.PI)/180;return{x:cx+r*Math.cos(rad),y:cy+r*Math.sin(rad)};}
+
+function MindMapSVG({data,visible,onNodeClick,onExpand}){
+  const[hov,setHov]=useState(null);
+  const[ctxMenu,setCtxMenu]=useState(null);
+  useEffect(()=>{const fn=()=>setCtxMenu(null);window.addEventListener("click",fn);return()=>window.removeEventListener("click",fn);},[]);
+
+  if(!data)return null;
+  const W=900,H=700,CX=W/2,CY=H/2;
+  const branches=data.branches||[];
+  const step=360/Math.max(branches.length,1);
+  const nodes=[{id:"root",x:CX,y:CY,label:data.topic,isRoot:true,source:data.source,fact:""}];
+  const edges=[];
+
+  branches.forEach((b,bi)=>{
+    const ang=bi*step,col=COLORS[bi%COLORS.length];
+    const p1=pxy(CX,CY,190,ang);
+    nodes.push({id:`b${bi}`,x:p1.x,y:p1.y,label:b.title,col,depth:1,source:b.source,fact:b.fact});
+    edges.push({x1:CX,y1:CY,x2:p1.x,y2:p1.y,col,i:bi});
+    (b.children||[]).forEach((c,ci)=>{
+      const ca=ang+(ci-(b.children.length-1)/2)*36;
+      const p2=pxy(p1.x,p1.y,130,ca);
+      nodes.push({id:`b${bi}_c${ci}`,x:p2.x,y:p2.y,label:c.label,col,depth:2,source:c.source,fact:c.fact});
+      edges.push({x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y,col,thin:true,i:bi*10+ci});
+    });
+  });
+
+  const onRC=(e,n)=>{e.preventDefault();e.stopPropagation();setCtxMenu({node:n,x:e.clientX,y:e.clientY});};
+
+  return(
+    <div style={{position:"relative",width:"100%",height:"100%"}}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"100%"}}>
+        <defs>
+          <radialGradient id="rg" cx="40%" cy="30%">
+            <stop offset="0%" stopColor="#a78bfa"/>
+            <stop offset="100%" stopColor="#7c3aed"/>
+          </radialGradient>
+          <filter id="sh"><feDropShadow dx="0" dy="3" stdDeviation="6" floodColor="#00000030"/></filter>
+          <filter id="shb"><feDropShadow dx="0" dy="6" stdDeviation="14" floodColor="#00000050"/></filter>
+        </defs>
+
+        {edges.map((e,i)=>{
+          const mx=(e.x1+e.x2)/2,my=(e.y1+e.y2)/2;
+          return<path key={i} d={`M${e.x1},${e.y1} Q${mx},${my} ${e.x2},${e.y2}`}
+            fill="none" stroke={e.col?.bg||"#7c3aed"}
+            strokeWidth={e.thin?1.5:3} strokeOpacity={e.thin?0.4:0.65} strokeLinecap="round"
+            style={{strokeDasharray:600,strokeDashoffset:visible?0:600,transition:`stroke-dashoffset ${0.6+i*0.03}s ease`}}/>;
+        })}
+
+        {nodes.map((n,i)=>{
+          const isH=hov===n.id,delay=`${0.08+i*0.035}s`,hasLink=!!n.source;
+          if(n.isRoot)return(
+            <g key={n.id} style={{opacity:visible?1:0,transition:`opacity 0.5s ${delay}`,cursor:"pointer"}}
+              onClick={()=>hasLink&&onNodeClick(n)} onContextMenu={e=>onRC(e,n)}>
+              <circle cx={n.x} cy={n.y} r={isH?68:62} fill="url(#rg)" filter="url(#shb)" style={{transition:"r 0.2s"}}
+                onMouseEnter={()=>setHov(n.id)} onMouseLeave={()=>setHov(null)}/>
+              <circle cx={n.x} cy={n.y} r={53} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={1.5}/>
+              <text x={n.x} y={n.y-(hasLink?6:0)} textAnchor="middle" dominantBaseline="middle"
+                fontSize={n.label.length>12?12:14} fontWeight="800" fill="white"
+                style={{pointerEvents:"none",userSelect:"none"}}>
+                {n.label.length>18?n.label.slice(0,16)+"…":n.label}
+              </text>
+              {hasLink&&<text x={n.x} y={n.y+13} textAnchor="middle" fontSize={9} fill="rgba(255,255,255,0.5)" style={{pointerEvents:"none"}}>🔗 nguồn</text>}
+            </g>
+          );
+          if(n.depth===1)return(
+            <g key={n.id} style={{opacity:visible?1:0,transition:`opacity 0.5s ${delay}`,cursor:"pointer"}}
+              onClick={()=>onNodeClick(n)} onContextMenu={e=>onRC(e,n)}
+              onMouseEnter={()=>setHov(n.id)} onMouseLeave={()=>setHov(null)}>
+              <circle cx={n.x} cy={n.y} r={isH?54:48} fill={n.col.bg} filter="url(#sh)" style={{transition:"r 0.2s"}}/>
+              <circle cx={n.x} cy={n.y} r={40} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={1.5}/>
+              <text x={n.x} y={n.y-(hasLink?8:4)} textAnchor="middle" dominantBaseline="middle"
+                fontSize={n.label.length>10?10:12} fontWeight="700" fill="white"
+                style={{pointerEvents:"none",userSelect:"none"}}>
+                {n.label.length>14?n.label.slice(0,13)+"…":n.label}
+              </text>
+              {hasLink&&<text x={n.x} y={n.y+9} textAnchor="middle" fontSize={9} fill="rgba(255,255,255,0.5)" style={{pointerEvents:"none"}}>🔗</text>}
+              <text x={n.x} y={n.y+(hasLink?22:18)} textAnchor="middle" fontSize={8} fill="rgba(255,255,255,0.3)" style={{pointerEvents:"none"}}>⊕</text>
+            </g>
+          );
+          const w=Math.max(82,Math.min(n.label.length*7.5+24,138));
+          return(
+            <g key={n.id} style={{opacity:visible?1:0,transition:`opacity 0.5s ${delay}`,cursor:"pointer"}}
+              onClick={()=>onNodeClick(n)} onContextMenu={e=>onRC(e,n)}
+              onMouseEnter={()=>setHov(n.id)} onMouseLeave={()=>setHov(null)}>
+              <rect x={n.x-w/2} y={n.y-15} width={w} height={30} rx={15}
+                fill={isH?n.col.bg:n.col.light} stroke={n.col.bg} strokeWidth={isH?0:1.5}
+                filter={isH?"url(#sh)":"none"} style={{transition:"fill 0.15s"}}/>
+              <text x={n.x} y={n.y} textAnchor="middle" dominantBaseline="middle"
+                fontSize={9.5} fontWeight="600" fill={isH?"white":n.col.dark}
+                style={{pointerEvents:"none",userSelect:"none",transition:"fill 0.15s"}}>
+                {n.label.length>16?n.label.slice(0,15)+"…":n.label}{hasLink?" 🔗":""}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {ctxMenu&&(
+        <div style={{position:"fixed",left:ctxMenu.x,top:ctxMenu.y,zIndex:999,
+          background:"#13112e",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,
+          padding:"6px 0",boxShadow:"0 10px 40px rgba(0,0,0,0.6)",minWidth:200}}
+          onClick={e=>e.stopPropagation()}>
+          <div style={{padding:"5px 14px 8px",fontSize:11,color:"rgba(255,255,255,0.35)",
+            borderBottom:"1px solid rgba(255,255,255,0.07)",fontFamily:"system-ui",
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:196}}>
+            {ctxMenu.node.label}
+          </div>
+          {[
+            {icon:"🔗",label:"Xem nguồn & fact",fn:()=>{onNodeClick(ctxMenu.node);setCtxMenu(null);}},
+            {icon:"⊕",label:"Expand nhánh này",fn:()=>{onExpand(ctxMenu.node,false);setCtxMenu(null);}},
+            {icon:"🔎",label:"Search node này",fn:()=>{onExpand(ctxMenu.node,true);setCtxMenu(null);}},
+          ].map((item,i)=>(
+            <div key={i} onClick={item.fn}
+              style={{padding:"9px 14px",cursor:"pointer",fontSize:13,color:"rgba(255,255,255,0.82)",
+                display:"flex",alignItems:"center",gap:9,fontFamily:"system-ui"}}
+              onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,0.07)"}
+              onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              <span style={{fontSize:14}}>{item.icon}</span>{item.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// NODE POPUP
+// ═══════════════════════════════════════════════════════════
+function NodePopup({node,onClose}){
+  if(!node)return null;
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:200,
+      display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(8px)"}}
+      onClick={onClose}>
+      <div style={{background:"linear-gradient(135deg,#13112e,#1e1b4b)",borderRadius:20,
+        border:"1px solid rgba(255,255,255,0.12)",padding:28,maxWidth:500,width:"90%",
+        boxShadow:"0 30px 80px rgba(0,0,0,0.7)"}}
+        onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+          <h3 style={{margin:0,color:"white",fontSize:18,fontWeight:800,fontFamily:"system-ui",flex:1,marginRight:12}}>{node.label}</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:20,cursor:"pointer",padding:0,flexShrink:0}}>✕</button>
+        </div>
+        {node.fact&&(
+          <div style={{background:"rgba(124,58,237,0.12)",borderRadius:12,padding:"12px 16px",marginBottom:16,borderLeft:"3px solid #7c3aed",borderRadius:"0 12px 12px 0"}}>
+            <div style={{color:"rgba(255,255,255,0.4)",fontSize:10,fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:1,fontFamily:"system-ui"}}>📌 Thông tin xác thực</div>
+            <div style={{color:"rgba(255,255,255,0.88)",fontSize:14,lineHeight:1.65,fontFamily:"system-ui"}}>{node.fact}</div>
+          </div>
+        )}
+        {node.fact==="🔍 Đang search..."&&(
+          <div style={{color:"rgba(255,255,255,0.4)",fontSize:13,textAlign:"center",padding:"8px 0",fontFamily:"system-ui"}}>Đang tìm kiếm...</div>
+        )}
+        {node.source?(
+          <a href={node.source} target="_blank" rel="noopener noreferrer"
+            style={{display:"flex",alignItems:"center",gap:10,background:"rgba(124,58,237,0.18)",
+              border:"1px solid rgba(124,58,237,0.35)",borderRadius:12,padding:"12px 16px",textDecoration:"none"}}>
+            <span style={{fontSize:18}}>🔗</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{color:"white",fontSize:13,fontWeight:600,fontFamily:"system-ui"}}>Xem nguồn tham khảo</div>
+              <div style={{color:"rgba(255,255,255,0.35)",fontSize:11,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                {node.source.replace(/^https?:\/\//,"").slice(0,60)}
+              </div>
+            </div>
+            <span style={{color:"rgba(255,255,255,0.35)",fontSize:16,flexShrink:0}}>↗</span>
+          </a>
+        ):(
+          <div style={{background:"rgba(217,119,6,0.12)",borderRadius:12,padding:"10px 14px",borderLeft:"3px solid #d97706",borderRadius:"0 12px 12px 0"}}>
+            <div style={{color:"#fbbf24",fontSize:12,fontFamily:"system-ui"}}>⚠️ Không có nguồn — thêm search key để lấy citations thật</div>
+          </div>
+        )}
+        <div style={{marginTop:12,color:"rgba(255,255,255,0.2)",fontSize:11,textAlign:"center",fontFamily:"system-ui"}}>
+          Click ra ngoài để đóng · Right-click node để expand / search
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// ONBOARDING WIZARD
+// ═══════════════════════════════════════════════════════════
+function Onboarding({onDone}){
+  const[step,setStep]=useState(0);
+  const[aiKey,setAiKey]=useState("");
+  const[detected,setDetected]=useState("");
+  const[model,setModel]=useState("");
+  const[searchProv,setSearchProv]=useState("wikipedia");
+  const[searchKey,setSearchKey]=useState("");
+  const[ghToken,setGhToken]=useState("");
+  const[testing,setTesting]=useState(false);
+  const[testMsg,setTestMsg]=useState("");
+
+  useEffect(()=>{
+    const d=detectProvider(aiKey);
+    if(d){setDetected(d);if(!model||!PROVIDERS[d]?.models.find(m=>m.id===model))setModel(PROVIDERS[d]?.defaultModel||"");}
+    else if(!aiKey)setDetected("");
+  },[aiKey]);
+
+  const handleTest=async()=>{
+    if(!aiKey||!detected){setTestMsg("❌ Nhập key trước");return;}
+    setTesting(true);setTestMsg("Đang test...");
+    try{
+      await callAI(detected,aiKey,model,[{role:"user",content:"Reply with exactly: OK"}]);
+      setTestMsg("✅ Kết nối thành công!");
+    }catch(e){setTestMsg(`❌ ${e.message.slice(0,80)}`);}
+    setTesting(false);
+  };
+
+  const canProceed=step===0?!!detected:(step===1?true:true);
+
+  const STEP_TITLES=["Bước 1/3 — AI Provider","Bước 2/3 — Search (tùy chọn)","Bước 3/3 — GitHub Gist Sync"];
+  const STEP_SUBS=["Nhập API key, app tự nhận diện provider và model","Thêm search key để lấy data mới nhất từ internet","Sync history lên GitHub để xem lại mọi nơi"];
+
+  const inp=(val,set,ph,type="text")=>(
+    <input value={val} onChange={e=>set(e.target.value)} placeholder={ph} type={type}
+      style={{width:"100%",padding:"11px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",
+        background:"rgba(255,255,255,0.04)",color:"white",fontSize:14,outline:"none",
+        fontFamily:"system-ui",boxSizing:"border-box"}}/>
+  );
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:400,
+      display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(12px)"}}>
+      <div style={{background:"#0a091e",borderRadius:24,border:"1px solid rgba(255,255,255,0.1)",
+        padding:36,maxWidth:500,width:"92%",boxShadow:"0 40px 100px rgba(0,0,0,0.9)"}}>
+        <style>{`input::placeholder{color:rgba(255,255,255,0.22)} select option{background:#1e1b4b;color:white}`}</style>
+
+        {/* Progress bar */}
+        <div style={{display:"flex",gap:8,marginBottom:24}}>
+          {STEP_TITLES.map((_,i)=>(
+            <div key={i} style={{flex:1,height:4,borderRadius:2,
+              background:i<=step?"linear-gradient(90deg,#7c3aed,#db2777)":"rgba(255,255,255,0.1)",
+              transition:"background 0.3s"}}/>
+          ))}
+        </div>
+
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:5,fontFamily:"system-ui"}}>{STEP_TITLES[step]}</div>
+        <div style={{fontSize:14,color:"rgba(255,255,255,0.55)",marginBottom:24,fontFamily:"system-ui"}}>{STEP_SUBS[step]}</div>
+
+        {step===0&&(
+          <div>
+            {inp(aiKey,setAiKey,"Paste API key...","password")}
+            {detected&&PROVIDERS[detected]&&(
+              <div style={{marginTop:10,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                <span style={{background:PROVIDERS[detected].color+"25",color:PROVIDERS[detected].color,
+                  border:`1px solid ${PROVIDERS[detected].color}40`,borderRadius:8,padding:"4px 12px",
+                  fontSize:13,fontWeight:700,fontFamily:"system-ui"}}>
+                  {PROVIDERS[detected].icon} {PROVIDERS[detected].name} detected
+                </span>
+                <span style={{fontSize:11,color:"rgba(255,255,255,0.35)",fontFamily:"system-ui"}}>Cutoff: {PROVIDERS[detected].cutoff}</span>
+              </div>
+            )}
+            {!aiKey&&(
+              <div style={{marginTop:14}}>
+                <div style={{fontSize:12,color:"rgba(255,255,255,0.35)",marginBottom:10,fontFamily:"system-ui"}}>Lấy API key miễn phí:</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+                  {Object.entries(PROVIDERS).map(([id,p])=>(
+                    <a key={id} href={p.signupUrl} target="_blank" rel="noopener noreferrer"
+                      style={{background:p.color+"18",color:p.color,border:`1px solid ${p.color}35`,
+                        borderRadius:8,padding:"5px 12px",fontSize:12,textDecoration:"none",fontFamily:"system-ui"}}>
+                      {p.icon} {p.name} ↗
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+            {detected&&PROVIDERS[detected]&&(
+              <div style={{marginTop:14}}>
+                <select value={model} onChange={e=>setModel(e.target.value)}
+                  style={{padding:"10px 12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",
+                    background:"#1e1b4b",color:"white",fontSize:13,fontFamily:"system-ui",width:"100%",marginBottom:10}}>
+                  {PROVIDERS[detected].models.map(m=>(
+                    <option key={m.id} value={m.id}>{m.label} — {m.free?"✅ Free":"💰 Paid"}</option>
+                  ))}
+                </select>
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <button onClick={handleTest} disabled={testing}
+                    style={{padding:"9px 16px",borderRadius:10,border:"none",
+                      background:testing?"rgba(124,58,237,0.3)":"#7c3aed",color:"white",
+                      fontWeight:700,fontSize:13,cursor:testing?"not-allowed":"pointer",fontFamily:"system-ui"}}>
+                    {testing?"Testing...":"🔌 Test kết nối"}
+                  </button>
+                  {testMsg&&<span style={{fontSize:12,color:testMsg.includes("✅")?"#10b981":"#f87171",fontFamily:"system-ui"}}>{testMsg}</span>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {step===1&&(
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+              {Object.entries(SEARCH_PROVIDERS).map(([id,sp])=>(
+                <div key={id} onClick={()=>setSearchProv(id)}
+                  style={{padding:"12px 14px",borderRadius:10,
+                    border:`1.5px solid ${searchProv===id?sp.color:"rgba(255,255,255,0.08)"}`,
+                    background:searchProv===id?sp.color+"18":"rgba(255,255,255,0.03)",
+                    cursor:"pointer",transition:"all 0.15s"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:searchProv===id?sp.color:"rgba(255,255,255,0.65)",fontFamily:"system-ui"}}>{sp.icon} {sp.name}</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.3)",marginTop:3,fontFamily:"system-ui"}}>{sp.freeReq}</div>
+                </div>
+              ))}
+            </div>
+            {searchProv!=="none"&&searchProv!=="wikipedia"&&(
+              <div>
+                {inp(searchKey,setSearchKey,SEARCH_PROVIDERS[searchProv]?.keyHint||"API key")}
+                {SEARCH_PROVIDERS[searchProv]?.signupUrl&&(
+                  <a href={SEARCH_PROVIDERS[searchProv].signupUrl} target="_blank" rel="noopener noreferrer"
+                    style={{fontSize:11,color:"rgba(255,255,255,0.3)",fontFamily:"system-ui",display:"block",marginTop:6}}>Đăng ký miễn phí ↗</a>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {step===2&&(
+          <div>
+            {inp(ghToken,setGhToken,"GitHub Personal Access Token (ghp_...)","password")}
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.3)",marginTop:8,lineHeight:1.65,fontFamily:"system-ui"}}>
+              Tạo tại <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" style={{color:"#7c3aed"}}>github.com/settings/tokens</a> với scope <code style={{background:"rgba(255,255,255,0.08)",padding:"1px 5px",borderRadius:4,fontSize:11}}>gist</code> — data lưu private Gist, sync mọi device.
+            </div>
+            <div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:"rgba(124,58,237,0.08)",border:"1px solid rgba(124,58,237,0.18)"}}>
+              <div style={{fontSize:12,color:"rgba(255,255,255,0.45)",fontFamily:"system-ui"}}>Bỏ qua được — history vẫn lưu trong browser.</div>
+            </div>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:10,marginTop:26}}>
+          {step>0&&(
+            <button onClick={()=>setStep(s=>s-1)}
+              style={{padding:"12px 20px",borderRadius:12,border:"1px solid rgba(255,255,255,0.12)",
+                background:"transparent",color:"rgba(255,255,255,0.55)",fontWeight:600,fontSize:14,
+                cursor:"pointer",fontFamily:"system-ui"}}>
+              ← Quay lại
+            </button>
+          )}
+          <button
+            onClick={()=>{
+              if(step<2)setStep(s=>s+1);
+              else onDone({aiKey,aiProvider:detected,model,searchKey,searchProvider:searchProv,ghToken});
+            }}
+            disabled={step===0&&!detected}
+            style={{flex:1,padding:"13px",borderRadius:12,border:"none",
+              background:step===0&&!detected?"rgba(124,58,237,0.25)":"linear-gradient(135deg,#7c3aed,#db2777)",
+              color:"white",fontWeight:800,fontSize:15,
+              cursor:step===0&&!detected?"not-allowed":"pointer",fontFamily:"system-ui"}}>
+            {step<2?"Tiếp theo →":"🚀 Bắt đầu"}
+          </button>
+        </div>
+
+        {step===0&&!detected&&(
+          <button onClick={()=>onDone(DEFAULT_SETTINGS)}
+            style={{width:"100%",marginTop:10,padding:"10px",borderRadius:12,
+              border:"1px solid rgba(255,255,255,0.08)",background:"transparent",
+              color:"rgba(255,255,255,0.3)",fontSize:13,cursor:"pointer",fontFamily:"system-ui"}}>
+            Xem demo trước (không cần key)
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// SETTINGS PANEL
+// ═══════════════════════════════════════════════════════════
+function SettingsPanel({settings,onChange,onClose}){
+  const[aiKey,setAiKey]=useState(settings.aiKey||"");
+  const[searchKey,setSearchKey]=useState(settings.searchKey||"");
+  const[detected,setDetected]=useState(settings.aiProvider||"");
+  const[model,setModel]=useState(settings.model||"");
+  const[searchProv,setSearchProv]=useState(settings.searchProvider||"none");
+  const[ghToken,setGhToken]=useState(settings.ghToken||"");
+  const[testing,setTesting]=useState(false);
+  const[testMsg,setTestMsg]=useState("");
+
+  useEffect(()=>{
+    const d=detectProvider(aiKey);
+    if(d){setDetected(d);if(!model||!PROVIDERS[d]?.models.find(m=>m.id===model))setModel(PROVIDERS[d]?.defaultModel||"");}
+    else if(!aiKey)setDetected("");
+  },[aiKey]);
+
+  const handleTest=async()=>{
+    if(!aiKey||!detected){setTestMsg("❌ Nhập key trước");return;}
+    setTesting(true);setTestMsg("Đang test...");
+    try{await callAI(detected,aiKey,model,[{role:"user",content:"Reply: OK"}]);setTestMsg("✅ OK!");}
+    catch(e){setTestMsg(`❌ ${e.message.slice(0,80)}`);} setTesting(false);
+  };
+
+  const inp=(val,set,ph,type="text")=>(
+    <input value={val} onChange={e=>set(e.target.value)} placeholder={ph} type={type}
+      style={{width:"100%",padding:"10px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",
+        background:"rgba(255,255,255,0.04)",color:"white",fontSize:13,outline:"none",
+        fontFamily:"system-ui",boxSizing:"border-box"}}/>
+  );
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:300,
+      display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(8px)"}}
+      onClick={onClose}>
+      <div style={{background:"#0a091e",borderRadius:24,border:"1px solid rgba(255,255,255,0.1)",
+        padding:32,maxWidth:540,width:"92%",maxHeight:"90vh",overflowY:"auto",
+        boxShadow:"0 40px 100px rgba(0,0,0,0.85)"}}
+        onClick={e=>e.stopPropagation()}>
+        <style>{`input::placeholder{color:rgba(255,255,255,0.22)} select option{background:#1e1b4b;color:white}`}</style>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:26}}>
+          <h2 style={{margin:0,color:"white",fontSize:20,fontWeight:900,fontFamily:"system-ui"}}>⚙️ Cấu hình</h2>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:22,cursor:"pointer"}}>✕</button>
+        </div>
+
+        <div style={{marginBottom:20}}>
+          <div style={{color:"rgba(255,255,255,0.5)",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:9,fontFamily:"system-ui"}}>AI Provider</div>
+          {inp(aiKey,setAiKey,"Paste API key","password")}
+          {detected&&PROVIDERS[detected]&&(
+            <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <span style={{background:PROVIDERS[detected].color+"25",color:PROVIDERS[detected].color,border:`1px solid ${PROVIDERS[detected].color}40`,borderRadius:8,padding:"3px 10px",fontSize:12,fontWeight:700,fontFamily:"system-ui"}}>{PROVIDERS[detected].icon} {PROVIDERS[detected].name}</span>
+              <span style={{fontSize:11,color:"rgba(255,255,255,0.3)",fontFamily:"system-ui"}}>Cutoff: {PROVIDERS[detected].cutoff}</span>
+              <a href={PROVIDERS[detected].signupUrl} target="_blank" rel="noopener noreferrer" style={{color:"rgba(255,255,255,0.3)",fontSize:11,fontFamily:"system-ui"}}>Key ↗</a>
+            </div>
+          )}
+          {!detected&&aiKey.length>3&&(
+            <select value={detected} onChange={e=>{setDetected(e.target.value);setModel(PROVIDERS[e.target.value]?.defaultModel||"");}}
+              style={{marginTop:8,padding:"9px 12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",background:"#1e1b4b",color:"white",fontSize:13,fontFamily:"system-ui",width:"100%"}}>
+              <option value="">-- Chọn provider --</option>
+              {Object.entries(PROVIDERS).map(([id,p])=><option key={id} value={id}>{p.icon} {p.name}</option>)}
+            </select>
+          )}
+          {!aiKey&&(
+            <div style={{marginTop:10,display:"flex",flexWrap:"wrap",gap:6}}>
+              {Object.entries(PROVIDERS).map(([id,p])=>(
+                <a key={id} href={p.signupUrl} target="_blank" rel="noopener noreferrer"
+                  style={{background:p.color+"18",color:p.color,border:`1px solid ${p.color}35`,borderRadius:8,padding:"4px 10px",fontSize:11,textDecoration:"none",fontFamily:"system-ui"}}>{p.icon} {p.name} ↗</a>
+              ))}
+            </div>
+          )}
+          {detected&&PROVIDERS[detected]&&(
+            <select value={model} onChange={e=>setModel(e.target.value)}
+              style={{marginTop:10,padding:"9px 12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",background:"#1e1b4b",color:"white",fontSize:13,fontFamily:"system-ui",width:"100%"}}>
+              {PROVIDERS[detected].models.map(m=><option key={m.id} value={m.id}>{m.label} — {m.free?"✅ Free":"💰 Paid"}</option>)}
+            </select>
+          )}
+        </div>
+
+        <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:20}}>
+          <button onClick={handleTest} disabled={testing||!aiKey}
+            style={{padding:"9px 16px",borderRadius:10,border:"none",background:testing?"rgba(124,58,237,0.3)":"#7c3aed",color:"white",fontWeight:700,fontSize:13,cursor:testing||!aiKey?"not-allowed":"pointer",fontFamily:"system-ui"}}>
+            {testing?"Testing...":"🔌 Test"}
+          </button>
+          {testMsg&&<span style={{fontSize:12,color:testMsg.includes("✅")?"#10b981":"#f87171",fontFamily:"system-ui"}}>{testMsg}</span>}
+        </div>
+
+        <div style={{marginBottom:20}}>
+          <div style={{color:"rgba(255,255,255,0.5)",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:9,fontFamily:"system-ui"}}>Search Provider</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+            {Object.entries(SEARCH_PROVIDERS).map(([id,sp])=>(
+              <div key={id} onClick={()=>setSearchProv(id)}
+                style={{padding:"10px 14px",borderRadius:10,border:`1.5px solid ${searchProv===id?sp.color:"rgba(255,255,255,0.08)"}`,background:searchProv===id?sp.color+"18":"rgba(255,255,255,0.03)",cursor:"pointer",transition:"all 0.15s"}}>
+                <div style={{fontSize:12,fontWeight:700,color:searchProv===id?sp.color:"rgba(255,255,255,0.65)",fontFamily:"system-ui"}}>{sp.icon} {sp.name}</div>
+                {sp.freeReq&&<div style={{fontSize:10,color:"rgba(255,255,255,0.3)",marginTop:2,fontFamily:"system-ui"}}>{sp.freeReq}</div>}
+              </div>
+            ))}
+          </div>
+          {searchProv!=="none"&&searchProv!=="wikipedia"&&(
+            <div>
+              {inp(searchKey,setSearchKey,SEARCH_PROVIDERS[searchProv]?.keyHint||"API key")}
+              {SEARCH_PROVIDERS[searchProv]?.signupUrl&&<a href={SEARCH_PROVIDERS[searchProv].signupUrl} target="_blank" rel="noopener noreferrer" style={{color:"rgba(255,255,255,0.3)",fontSize:11,fontFamily:"system-ui"}}>Đăng ký miễn phí ↗</a>}
+            </div>
+          )}
+        </div>
+
+        <div style={{marginBottom:26,padding:16,borderRadius:12,border:"1px solid rgba(255,255,255,0.07)",background:"rgba(255,255,255,0.02)"}}>
+          <div style={{color:"rgba(255,255,255,0.5)",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:9,fontFamily:"system-ui"}}>GitHub Gist Sync</div>
+          {inp(ghToken,setGhToken,"GitHub Personal Access Token (ghp_...)","password")}
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.25)",marginTop:6,fontFamily:"system-ui"}}>
+            <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" style={{color:"#7c3aed"}}>Tạo token</a> với scope gist — lưu history private trên GitHub
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={()=>{onChange({aiKey,aiProvider:detected,model,searchKey,searchProvider:searchProv,ghToken});onClose();}}
+            style={{flex:1,padding:14,borderRadius:12,border:"none",background:"linear-gradient(135deg,#7c3aed,#db2777)",color:"white",fontWeight:800,fontSize:15,cursor:"pointer",fontFamily:"system-ui"}}>
+            💾 Lưu
+          </button>
+          <button onClick={onClose} style={{padding:"14px 20px",borderRadius:12,border:"1px solid rgba(255,255,255,0.12)",background:"transparent",color:"rgba(255,255,255,0.55)",fontWeight:600,fontSize:15,cursor:"pointer",fontFamily:"system-ui"}}>Hủy</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// HISTORY + WIKI PANEL
+// ═══════════════════════════════════════════════════════════
+function HistoryPanel({history,onLoad,onClose,onImport,onDelete}){
+  const[search,setSearch]=useState("");
+  const fileRef=useRef();
+
+  const filtered=history.filter(h=>
+    !search||
+    h.topic?.toLowerCase().includes(search.toLowerCase())||
+    h.tags?.some(t=>t.toLowerCase().includes(search.toLowerCase()))||
+    h.full_text?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleFile=e=>{
+    const f=e.target.files?.[0];
+    if(!f)return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      try{
+        const d=JSON.parse(ev.target.result);
+        if(d.topic&&d.branches){onImport(d);onClose();}
+        else alert("❌ File JSON không đúng format mind map (cần có topic và branches)");
+      }catch{alert("❌ File không phải JSON hợp lệ");}
+    };
+    r.readAsText(f);
+    e.target.value="";
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:250,
+      display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}}
+      onClick={onClose}>
+      <div style={{background:"#0a091e",borderRadius:20,border:"1px solid rgba(255,255,255,0.1)",
+        padding:28,maxWidth:520,width:"90%",maxHeight:"84vh",display:"flex",flexDirection:"column"}}
+        onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <h2 style={{margin:0,color:"white",fontSize:18,fontWeight:800,fontFamily:"system-ui"}}>
+            🕐 History & Wiki
+            <span style={{fontSize:13,fontWeight:400,color:"rgba(255,255,255,0.35)",marginLeft:8}}>({history.length})</span>
+          </h2>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <button onClick={()=>fileRef.current?.click()}
+              style={{padding:"6px 12px",borderRadius:8,border:"1px solid rgba(255,255,255,0.12)",
+                background:"rgba(255,255,255,0.05)",color:"rgba(255,255,255,0.7)",fontSize:12,
+                cursor:"pointer",fontFamily:"system-ui"}}>
+              📂 Import JSON
+            </button>
+            <input ref={fileRef} type="file" accept=".json" onChange={handleFile} style={{display:"none"}}/>
+            <button onClick={onClose} style={{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:20,cursor:"pointer"}}>✕</button>
+          </div>
+        </div>
+
+        <input value={search} onChange={e=>setSearch(e.target.value)}
+          placeholder="🔍 Tìm theo topic, tag, hoặc nội dung..."
+          style={{width:"100%",padding:"9px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",
+            background:"rgba(255,255,255,0.04)",color:"white",fontSize:13,outline:"none",
+            fontFamily:"system-ui",boxSizing:"border-box",marginBottom:14}}/>
+
+        <div style={{overflowY:"auto",flex:1}}>
+          {filtered.length===0?(
+            <div style={{color:"rgba(255,255,255,0.25)",textAlign:"center",padding:"40px 20px",fontFamily:"system-ui"}}>
+              {search?"Không tìm thấy kết quả nào":"Chưa có history — tạo mind map đầu tiên"}
+            </div>
+          ):filtered.map((h,i)=>(
+            <div key={h.id||i} style={{padding:"13px 16px",borderRadius:12,
+              border:"1px solid rgba(255,255,255,0.06)",marginBottom:8,
+              background:"rgba(255,255,255,0.02)",transition:"all 0.15s",position:"relative"}}
+              onMouseEnter={e=>e.currentTarget.style.background="rgba(124,58,237,0.1)"}
+              onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.02)"}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{flex:1,cursor:"pointer"}} onClick={()=>{onLoad(h);onClose();}}>
+                  <div style={{color:"white",fontWeight:700,fontSize:14,fontFamily:"system-ui"}}>{h.topic}</div>
+                  {h.tags?.length>0&&(
+                    <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
+                      {h.tags.slice(0,5).map((t,j)=>(
+                        <span key={j} style={{background:"rgba(124,58,237,0.18)",color:"#a78bfa",borderRadius:6,padding:"1px 7px",fontSize:10,fontFamily:"system-ui"}}>{t}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{color:"rgba(255,255,255,0.28)",fontSize:11,marginTop:5,fontFamily:"system-ui",display:"flex",gap:10,flexWrap:"wrap"}}>
+                    <span>{PROVIDERS[h.meta?.ai_provider]?.name||h.meta?.ai_provider||"?"} · {SEARCH_PROVIDERS[h.meta?.search_provider]?.name||h.meta?.search_provider||"?"}</span>
+                    <span>{h.created_at?new Date(h.created_at).toLocaleString("vi-VN"):""}</span>
+                  </div>
+                  <div style={{color:"rgba(255,255,255,0.18)",fontSize:11,marginTop:2,fontFamily:"system-ui"}}>
+                    {h.branches?.length||0} nhánh · {h.citations?.length||0} citations
+                  </div>
+                </div>
+                <button onClick={e=>{e.stopPropagation();onDelete(h.id||i);}}
+                  style={{background:"none",border:"none",color:"rgba(255,255,255,0.2)",fontSize:16,
+                    cursor:"pointer",padding:"0 0 0 8px",flexShrink:0,lineHeight:1}}
+                  onMouseEnter={e=>e.currentTarget.style.color="#f87171"}
+                  onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,0.2)"}>
+                  ✕
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════
+export default function App(){
+  const[topic,setTopic]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[data,setData]=useState(null);
+  const[visible,setVisible]=useState(false);
+  const[error,setError]=useState("");
+  const[history,setHistory]=useState([]);
+  const[selNode,setSelNode]=useState(null);
+  const[showSettings,setShowSettings]=useState(false);
+  const[showHistory,setShowHistory]=useState(false);
+  const[showOnboarding,setShowOnboarding]=useState(false);
+  const[gistMsg,setGistMsg]=useState("");
+  const[gistLoading,setGistLoading]=useState(false);
+  const[settings,setSettings]=useState(DEFAULT_SETTINGS);
+  const[ready,setReady]=useState(false);
+
+  const EXAMPLES=["Trí tuệ nhân tạo","Hệ mặt trời","Blockchain","COVID-19","Quantum Computing","Triết học Phật giáo"];
+
+  // Init
+  useEffect(()=>{
+    (async()=>{
+      let s=DEFAULT_SETTINGS;
+      let h=[];
+      if(window.storage){
+        try{const r=await window.storage.get("mm_s3");if(r?.value)s=JSON.parse(r.value);}catch{}
+        try{const r=await window.storage.get("mm_h3");if(r?.value)h=JSON.parse(r.value);}catch{}
+      }
+      setSettings(s);
+      setHistory(h);
+      setReady(true);
+      if(!s.aiKey)setShowOnboarding(true);
+    })();
+  },[]);
+
+  // Gist load (only when token present and ready, not on every render)
+  const gistLoaded=useRef(false);
+  useEffect(()=>{
+    if(!ready||!settings.ghToken||gistLoaded.current)return;
+    gistLoaded.current=true;
+    setGistLoading(true);
+    setGistMsg("Đang load Gist...");
+    gistLoad(settings.ghToken).then(h=>{
+      if(h&&Array.isArray(h)&&h.length>0){
+        setHistory(h);
+        if(window.storage)window.storage.set("mm_h3",JSON.stringify(h)).catch(()=>{});
+        setGistMsg(`✅ ${h.length} maps`);
+      }else setGistMsg("");
+      setGistLoading(false);
+    });
+  },[ready,settings.ghToken]);
+
+  const persist=useCallback((s,h)=>{
+    if(!window.storage)return;
+    window.storage.set("mm_s3",JSON.stringify(s)).catch(()=>{});
+    window.storage.set("mm_h3",JSON.stringify(h)).catch(()=>{});
+  },[]);
+
+  const saveSettings=useCallback((s)=>{
+    setSettings(s);
+    persist(s,history);
+    // Reset gist loaded flag if token changed
+    if(s.ghToken!==settings.ghToken)gistLoaded.current=false;
+  },[history,persist,settings.ghToken]);
+
+  const pushHistory=useCallback((rec,curHistory)=>{
+    const newH=[rec,...curHistory.filter(h=>h.topic!==rec.topic)].slice(0,50);
+    setHistory(newH);
+    return newH;
+  },[]);
+
+  const deleteHistory=useCallback((idOrIdx)=>{
+    setHistory(prev=>{
+      const newH=typeof idOrIdx==="string"
+        ?prev.filter(h=>h.id!==idOrIdx)
+        :prev.filter((_,i)=>i!==idOrIdx);
+      persist(settings,newH);
+      return newH;
+    });
+  },[settings,persist]);
+
+  const generate=useCallback(async(t)=>{
+    const q=(t!==undefined?t:topic).trim();
+    if(!q)return;
+    if(!settings.aiKey){setShowOnboarding(true);return;}
+    setLoading(true);setVisible(false);setError("");setData(null);
+
+    try{
+      // Search
+      let results=[];
+      if(settings.aiProvider!=="perplexity"&&settings.searchProvider!=="none"){
+        results=await doSearch(settings.searchProvider,settings.searchKey,q);
+      }
+
+      // Call AI
+      const{text,citations}=await callAI(settings.aiProvider,settings.aiKey,settings.model,[
+        {role:"system",content:"You are a knowledge expert. Return ONLY valid JSON. Never use markdown or code blocks."},
+        {role:"user",content:buildPrompt(q,results)},
+      ]);
+
+      // Parse — try direct then regex fallback
+      let parsed;
+      try{parsed=JSON.parse(text.replace(/^```json\s*|^```\s*|```\s*$/gm,"").trim());}
+      catch{
+        const m=text.match(/\{[\s\S]*\}/);
+        if(m)parsed=JSON.parse(m[0]);
+        else throw new Error("AI không trả về JSON hợp lệ. Thử lại hoặc đổi sang model khác (OpenRouter → Llama 3.3 70B)");
+      }
+
+      if(!parsed.topic||!Array.isArray(parsed.branches))
+        throw new Error("JSON thiếu field bắt buộc (topic hoặc branches). Thử lại.");
+
+      // Assign Perplexity citations to nodes
+      if(citations.length>0){
+        let ci=0;
+        if(!parsed.source&&citations[ci])parsed.source=citations[ci++];
+        (parsed.branches||[]).forEach(b=>{
+          if(!b.source&&citations[ci])b.source=citations[ci++];
+          (b.children||[]).forEach(c=>{if(!c.source&&citations[ci])c.source=citations[ci++];});
+        });
+      }
+
+      setData(parsed);
+      const rec=buildRecord(parsed,settings);
+      const newH=pushHistory(rec,history);
+      persist(settings,newH);
+
+      if(settings.ghToken){
+        setGistMsg("Syncing...");
+        gistSave(settings.ghToken,newH).then(r=>{setGistMsg(r.msg);}).catch(()=>setGistMsg("⚠️ Gist failed"));
+      }
+
+      setTimeout(()=>setVisible(true),80);
+    }catch(e){
+      setError(e.message||"Lỗi không xác định — thử lại");
+    }finally{setLoading(false);}
+  },[topic,settings,history,pushHistory,persist]);
+
+  const handleExpand=useCallback(async(node,searchOnly=false)=>{
+    if(!settings.aiKey){alert("Cần API key để expand");return;}
+
+    if(searchOnly){
+      setSelNode({...node,fact:"🔍 Đang search..."});
+      const res=await doSearch(settings.searchProvider,settings.searchKey,node.label);
+      if(res.length>0)setSelNode({...node,fact:res[0].snippet,source:res[0].url||node.source});
+      else setSelNode({...node,fact:"Không tìm thấy kết quả search cho: "+node.label});
+      return;
+    }
+
+    try{
+      const{text}=await callAI(settings.aiProvider,settings.aiKey,settings.model,[{
+        role:"user",
+        content:`Generate 3 specific factual sub-points for: "${node.label}". Return JSON only: {"children":[{"label":"≤16 chars","fact":"specific verifiable fact with numbers/dates","source":"Wikipedia or credible URL"}]}. ONLY JSON starting with {`,
+      }]);
+      let parsed;
+      try{parsed=JSON.parse(text.replace(/^```json\s*|^```\s*|```\s*$/gm,"").trim());}
+      catch{const m=text.match(/\{[\s\S]*\}/);if(m)parsed=JSON.parse(m[0]);else return;}
+
+      if(parsed.children&&Array.isArray(parsed.children)&&data){
+        const nd=JSON.parse(JSON.stringify(data));
+        const b=nd.branches?.find(b=>b.title===node.label);
+        if(b){
+          b.children=[...(b.children||[]),...parsed.children];
+          setData(nd);
+          setVisible(false);
+          setTimeout(()=>setVisible(true),50);
+        }
+      }
+    }catch(e){console.warn("Expand failed:",e.message);}
+  },[settings,data]);
+
+  const handleImport=useCallback((importedData)=>{
+    setData(importedData);
+    setError("");
+    setTimeout(()=>setVisible(true),80);
+  },[]);
+
+  const handleOnboardingDone=useCallback((s)=>{
+    setShowOnboarding(false);
+    if(s!==DEFAULT_SETTINGS){
+      setSettings(s);
+      persist(s,history);
+      if(s.ghToken)gistLoaded.current=false;
+    }
+  },[history,persist]);
+
+  const cutoff=ready?getCutoffWarning(settings.aiProvider,settings.searchProvider):null;
+  const hasSearch=settings.aiProvider==="perplexity"||(settings.searchProvider&&settings.searchProvider!=="none"&&(settings.searchProvider==="wikipedia"||!!settings.searchKey));
+  const prov=settings.aiProvider?PROVIDERS[settings.aiProvider]:null;
+
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#080717 0%,#0f0e2a 45%,#0b1420 100%)",
+      fontFamily:"system-ui,-apple-system,sans-serif",display:"flex",flexDirection:"column",
+      alignItems:"center",padding:"20px 12px"}}>
+      <style>{`
+        input::placeholder{color:rgba(255,255,255,0.22)}
+        input:focus{border-color:rgba(124,58,237,0.55)!important;outline:none}
+        .chip:hover{background:rgba(255,255,255,0.1)!important;color:white!important}
+        .tbtn:hover{background:rgba(255,255,255,0.08)!important}
+        .genbtn:hover:not(:disabled){filter:brightness(1.12);transform:translateY(-1px)}
+        .expbtn:hover{background:rgba(255,255,255,0.08)!important}
+        @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        ::-webkit-scrollbar{width:4px}
+        ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:2px}
+      `}</style>
+
+      {/* Header */}
+      <div style={{width:"100%",maxWidth:960,display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22,animation:"fadeUp 0.45s ease"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:28}}>🧠</span>
+          <div>
+            <h1 style={{margin:0,fontSize:21,fontWeight:900,color:"white",letterSpacing:-0.5}}>AI Mind Map</h1>
+            {prov&&<div style={{fontSize:11,color:"rgba(255,255,255,0.3)",marginTop:1}}>
+              {prov.icon} {prov.name}{settings.model?` · ${settings.model.split("/").pop().split(":")[0]}`:""}{hasSearch?" · 🔍 search":""}
+            </div>}
+          </div>
+          <span style={{background:"linear-gradient(90deg,#7c3aed,#db2777)",borderRadius:7,padding:"2px 9px",fontSize:10,fontWeight:800,color:"white"}}>v3</span>
+        </div>
+        <div style={{display:"flex",gap:7,alignItems:"center"}}>
+          {gistLoading&&<span style={{fontSize:10,color:"rgba(255,255,255,0.3)"}}>⟳ Gist</span>}
+          {!gistLoading&&gistMsg&&<span style={{fontSize:10,color:"rgba(255,255,255,0.35)"}}>{gistMsg}</span>}
+          {[{icon:"🕐",fn:()=>setShowHistory(true)},{icon:"⚙️",fn:()=>setShowSettings(true)}].map((b,i)=>(
+            <button key={i} className="tbtn" onClick={b.fn}
+              style={{padding:"8px 12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",
+                background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.75)",
+                fontSize:15,cursor:"pointer",transition:"all 0.15s"}}>
+              {b.icon}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Input */}
+      <div style={{display:"flex",gap:9,width:"100%",maxWidth:640,marginBottom:11,animation:"fadeUp 0.45s 0.08s ease both"}}>
+        <input value={topic} onChange={e=>setTopic(e.target.value)} onKeyDown={e=>e.key==="Enter"&&generate()}
+          placeholder="Nhập chủ đề bất kỳ..."
+          style={{flex:1,padding:"13px 18px",borderRadius:13,border:"1.5px solid rgba(255,255,255,0.09)",
+            background:"rgba(255,255,255,0.04)",color:"white",fontSize:15,transition:"border-color 0.2s"}}/>
+        <button onClick={()=>generate()} disabled={loading||!topic.trim()} className="genbtn"
+          style={{padding:"13px 22px",borderRadius:13,border:"none",
+            cursor:loading||!topic.trim()?"not-allowed":"pointer",
+            background:loading||!topic.trim()?"rgba(124,58,237,0.22)":"linear-gradient(135deg,#7c3aed,#db2777)",
+            color:"white",fontWeight:800,fontSize:14,transition:"all 0.2s",whiteSpace:"nowrap",
+            boxShadow:loading||!topic.trim()?"none":"0 4px 18px rgba(124,58,237,0.4)"}}>
+          {loading?"⏳":"✨ Tạo"}
+        </button>
+      </div>
+
+      {/* Status badges */}
+      <div style={{display:"flex",gap:7,marginBottom:14,flexWrap:"wrap",justifyContent:"center",animation:"fadeUp 0.45s 0.12s ease both"}}>
+        {!settings.aiKey&&(
+          <span onClick={()=>setShowOnboarding(true)}
+            style={{background:"rgba(220,38,38,0.12)",border:"1px solid rgba(220,38,38,0.25)",borderRadius:20,padding:"4px 12px",fontSize:11,color:"#f87171",cursor:"pointer"}}>
+            ❌ Chưa có API key — click để cấu hình
+          </span>
+        )}
+        {cutoff&&(
+          <span style={{background:"rgba(217,119,6,0.12)",border:"1px solid rgba(217,119,6,0.25)",borderRadius:20,padding:"4px 12px",fontSize:11,color:"#fbbf24"}}>
+            ⚠️ Cutoff: {cutoff}
+          </span>
+        )}
+        {prov&&(
+          <span style={{background:prov.color+"20",border:`1px solid ${prov.color}35`,borderRadius:20,padding:"4px 12px",fontSize:11,color:prov.color}}>
+            {prov.icon} {prov.name}
+          </span>
+        )}
+        {hasSearch&&settings.searchProvider!=="none"&&(
+          <span style={{background:"rgba(5,150,105,0.12)",border:"1px solid rgba(5,150,105,0.25)",borderRadius:20,padding:"4px 12px",fontSize:11,color:"#34d399"}}>
+            🔍 {SEARCH_PROVIDERS[settings.searchProvider]?.name}
+          </span>
+        )}
+      </div>
+
+      {/* Examples */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:18,justifyContent:"center",animation:"fadeUp 0.45s 0.16s ease both"}}>
+        {EXAMPLES.map((ex,i)=>(
+          <button key={i} className="chip" onClick={()=>{setTopic(ex);generate(ex);}}
+            style={{padding:"5px 13px",borderRadius:20,border:"1px solid rgba(255,255,255,0.1)",
+              background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.6)",fontSize:12,
+              cursor:"pointer",transition:"all 0.15s"}}>
+            💡 {ex}
+          </button>
+        ))}
+      </div>
+
+      {/* Canvas */}
+      <div style={{width:"100%",maxWidth:960,background:"rgba(255,255,255,0.015)",borderRadius:22,
+        border:"1px solid rgba(255,255,255,0.06)",position:"relative",overflow:"hidden",
+        boxShadow:"0 30px 100px rgba(0,0,0,0.6)",aspectRatio:"900/700",display:"flex",
+        alignItems:"center",justifyContent:"center",animation:"fadeUp 0.45s 0.2s ease both"}}>
+        {[...Array(4)].map((_,i)=>(
+          <div key={i} style={{position:"absolute",borderRadius:"50%",border:"1px solid rgba(255,255,255,0.018)",
+            width:150+i*100,height:150+i*100,top:"50%",left:"50%",transform:"translate(-50%,-50%)",pointerEvents:"none"}}/>
+        ))}
+
+        {!data&&!loading&&!error&&(
+          <div style={{textAlign:"center",color:"rgba(255,255,255,0.14)",zIndex:1,padding:20}}>
+            <div style={{fontSize:58,marginBottom:12,opacity:0.5}}>🗺️</div>
+            <div style={{fontSize:15,fontWeight:600,marginBottom:5}}>
+              {!settings.aiKey?"Nhấn ⚙️ để cấu hình API key":"Nhập chủ đề và nhấn Tạo"}
+            </div>
+            <div style={{fontSize:11,opacity:0.65}}>Right-click node để expand · Click để xem nguồn · 🕐 History để import JSON</div>
+          </div>
+        )}
+
+        {loading&&(
+          <div style={{textAlign:"center",zIndex:1}}>
+            <div style={{fontSize:50,marginBottom:14,animation:"pulse 1s ease infinite"}}>🧠</div>
+            <div style={{fontSize:15,fontWeight:700,color:"rgba(255,255,255,0.82)"}}>Đang xử lý...</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.28)",marginTop:7}}>
+              {hasSearch?"Search → AI → Citations":"AI generate (no search)"}
+            </div>
+          </div>
+        )}
+
+        {error&&(
+          <div style={{textAlign:"center",zIndex:1,padding:24}}>
+            <div style={{fontSize:34,marginBottom:10}}>⚠️</div>
+            <div style={{color:"#f87171",fontSize:14,maxWidth:440,lineHeight:1.65,fontFamily:"system-ui"}}>{error}</div>
+            <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:16,flexWrap:"wrap"}}>
+              {settings.aiKey&&(
+                <button onClick={()=>generate(topic||"Trí tuệ nhân tạo")}
+                  style={{padding:"9px 16px",borderRadius:10,border:"none",background:"#7c3aed",color:"white",cursor:"pointer",fontWeight:700,fontSize:13}}>
+                  🔄 Thử lại
+                </button>
+              )}
+              <button onClick={()=>setShowSettings(true)}
+                style={{padding:"9px 16px",borderRadius:10,border:"1px solid rgba(255,255,255,0.15)",background:"transparent",color:"rgba(255,255,255,0.7)",cursor:"pointer",fontSize:13}}>
+                ⚙️ Settings
+              </button>
+            </div>
+          </div>
+        )}
+
+        {data&&!loading&&(
+          <div style={{width:"100%",height:"100%",position:"absolute",inset:0}}>
+            <MindMapSVG data={data} visible={visible} onNodeClick={setSelNode} onExpand={handleExpand}/>
+          </div>
+        )}
+      </div>
+
+      {/* Export bar */}
+      {data&&!loading&&(
+        <div style={{display:"flex",gap:9,marginTop:14,flexWrap:"wrap",justifyContent:"center",animation:"fadeUp 0.35s ease"}}>
+          {[
+            {icon:"🖼️",label:"PNG",fn:()=>dlPNG(data.topic)},
+            {icon:"📄",label:"JSON",fn:()=>dlJSON(data,settings)},
+            {icon:"🌐",label:"Standalone HTML",fn:()=>dlStandaloneHTML(data,settings)},
+          ].map((b,i)=>(
+            <button key={i} className="expbtn" onClick={b.fn}
+              style={{padding:"8px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",
+                background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.7)",fontSize:13,
+                cursor:"pointer",transition:"all 0.15s",display:"flex",alignItems:"center",gap:5}}>
+              {b.icon} {b.label}
+            </button>
+          ))}
+          <div style={{color:"rgba(255,255,255,0.18)",fontSize:11,alignSelf:"center"}}>Right-click node để expand</div>
+        </div>
+      )}
+
+      {/* Modals */}
+      {showOnboarding&&<Onboarding onDone={handleOnboardingDone}/>}
+      {showSettings&&<SettingsPanel settings={settings} onChange={saveSettings} onClose={()=>setShowSettings(false)}/>}
+      {showHistory&&(
+        <HistoryPanel
+          history={history}
+          onLoad={d=>{setData(d);setError("");setTimeout(()=>setVisible(true),80);}}
+          onClose={()=>setShowHistory(false)}
+          onImport={handleImport}
+          onDelete={deleteHistory}/>
+      )}
+      {selNode&&<NodePopup node={selNode} onClose={()=>setSelNode(null)}/>}
+    </div>
+  );
+}
